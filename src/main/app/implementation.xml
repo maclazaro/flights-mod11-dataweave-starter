@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<mule xmlns:validation="http://www.mulesoft.org/schema/mule/validation" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:ws="http://www.mulesoft.org/schema/mule/ws" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+<mule xmlns:mulexml="http://www.mulesoft.org/schema/mule/xml" xmlns:validation="http://www.mulesoft.org/schema/mule/validation" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:ws="http://www.mulesoft.org/schema/mule/ws" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
 	xmlns:spring="http://www.springframework.org/schema/beans" 
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
@@ -9,7 +9,8 @@ http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/htt
 http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
 http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
 http://www.mulesoft.org/schema/mule/ws http://www.mulesoft.org/schema/mule/ws/current/mule-ws.xsd
-http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd">
+http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd
+http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/current/mule-xml.xsd">
     <flow name="getFlightsFlow">
         <set-variable variableName="airline" value="#[message.inboundProperties.'http.query.params'.airline]" doc:name="Set airline variable"/>
         <flow-ref name="setCodeSubflow" doc:name="setCodeSubflow"/>
@@ -32,69 +33,70 @@ http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mu
 %output application/java
 ---
 payload orderBy $.price]]></dw:set-payload>
+            <dw:set-variable variableName="flightsPayload"><![CDATA[%dw 1.0
+%output application/java
+---
+payload orderBy $.price]]></dw:set-variable>
         </dw:transform-message>
+        <flow-ref name="transactionsFlow" doc:name="transactionsFlow"/>
+        <flow-ref name="accountsFlow" doc:name="accountsFlow"/>
         <dw:transform-message doc:name="Combine Payloads and Convert to XML">
             <dw:set-payload><![CDATA[%dw 1.0
-%output application/json
+%output application/xml
+%type currency = :string {format: "#,###.00"}
 
 //Code assumes there are three payloads saved as flow variables:
 //  -> flightsPayload
 //  -> transactionsPayload
 //  -> accountsPayload
 
-//Create a function to take care of building the Transaction objects
-//End result should be an array of Transaction objects with a new structure according to the Transaction datatype in the RAML spec
 %function createNewTransactions(transactions)
 transactions map ((transaction) ->
-	
 	//Assign a local variable within the map scope by utilizing the "using" operator
 	using (account = (flowVars.accountsPayload filter ($.accountID == transaction.customerRef))[0])
-	(	
-		//Code transformation here for each transaction object
-		transaction : {}
+	(
+		 transaction @(transID: transaction.transactionID, amount: transaction.amount as :number):
+			{
+				idCustomer: transaction.customerRef,
+				nameCustomer: account.name,
+				accountType: account.accountType
+		    } ++
+		    (
+		    	{amountUSFormatted: transaction.amount as :number as :currency } when transaction.region == "US"
+		    		otherwise
+		    	{amountEUFormatted: transaction.amount as :number as :currency replace "," with "_" replace "." with "," replace "_" with "." } when transaction.region == "EU"
+		    		otherwise
+		    	{}
+		    )
 	)
 )
 ---
-flights:  
-		
-	//Filter the transactions according to the unique Flight ID in flowVars.transactionsPayload
-	using (filteredTransactions = [])
-	(	
-		//Build the rest of the transformations here for each flight object in flowVars.flightsPayload. Refer to the RAML spec on what exactly needs to get mapped
-		flight: {}
-	)
-
-]]></dw:set-payload>
+flights: {( 
+	
+	flowVars.flightsPayload map ((flight) ->
+		using (flightIDforTransactions = upper (flight.airlineName ++ flight.flightCode ++ (flight.departureDate replace "/" with "-") ) )
+		using (filteredTransactions = flowVars.transactionsPayload filter $.flightID == flightIDforTransactions)
+	    (	
+			flight @(flightCode: flight.flightCode): {
+				airline: flight.airlineName,
+				departureDate: flight.departureDate as :date {format: "yyyy/MM/dd"} as :string {format: "yyyy-MMM-dd"},
+				emptySeats: flight.availableSeats,
+				fromAirportCode: flight.origination,
+				planeType: flight.planeType,
+				price: flight.price,
+				toAirportCode: flight.destination,
+				transactions: {( createNewTransactions(filteredTransactions) )}
+			}
+		)
+	
+ 	)
+)}]]></dw:set-payload>
         </dw:transform-message>
 
     </flow>
     <sub-flow name="setCodeSubflow">
         <set-variable variableName="code" value="#[message.inboundProperties.'http.query.params'.code]" doc:name="Set airport code"/>
     </sub-flow>
-    <flow name="getUnitedFlightsFlow">
-        <http:request config-ref="United_HTTP_Request_Configuration" path="/essentials/united/flights/{destination}" method="GET" doc:name="United REST Request" metadata:id="28a62c98-e01d-46fb-afe1-c90d7a3c3471">
-            <http:request-builder>
-                <http:uri-param paramName="destination" value="#[flowVars.code]"/>
-            </http:request-builder>
-        </http:request>
-        <dw:transform-message doc:name="Transform Message" metadata:id="c939751d-bc7a-4917-8f4b-2de750686189">
-            <dw:set-payload><![CDATA[%dw 1.0
-%output application/java
----
-payload.flights map ((flight , indexOfFlight) -> {
-	airlineName: flight.airlineName,
-	availableSeats: flight.emptySeats,
-	departureDate: flight.departureDate,
-	destination: flight.destination,
-	flightCode: flight.code,
-	origination: flight.origin,
-	planeType: flight.planeType,
-	price: flight.price
-} as :object {
-	class : "com.mulesoft.training.Flight"
-})]]></dw:set-payload>
-        </dw:transform-message>
-    </flow>
     <flow name="getDeltaFlightsFlow">
         <dw:transform-message doc:name="Transform Message">
             <dw:set-payload><![CDATA[%dw 1.0
@@ -122,6 +124,30 @@ payload.ns0#findFlightResponse.*return map ((return , indexOfReturn) -> {
 	origination: return.origin,
 	planeType: return.planeType,
 	price: return.price
+} as :object {
+	class : "com.mulesoft.training.Flight"
+})]]></dw:set-payload>
+        </dw:transform-message>
+    </flow>
+    <flow name="getUnitedFlightsFlow">
+        <http:request config-ref="United_HTTP_Request_Configuration" path="/essentials/united/flights/{destination}" method="GET" doc:name="United REST Request" metadata:id="28a62c98-e01d-46fb-afe1-c90d7a3c3471">
+            <http:request-builder>
+                <http:uri-param paramName="destination" value="#[flowVars.code]"/>
+            </http:request-builder>
+        </http:request>
+        <dw:transform-message doc:name="Transform Message" metadata:id="c939751d-bc7a-4917-8f4b-2de750686189">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+payload.flights map ((flight , indexOfFlight) -> {
+	airlineName: flight.airlineName,
+	availableSeats: flight.emptySeats,
+	departureDate: flight.departureDate,
+	destination: flight.destination,
+	flightCode: flight.code,
+	origination: flight.origin,
+	planeType: flight.planeType,
+	price: flight.price
 } as :object {
 	class : "com.mulesoft.training.Flight"
 })]]></dw:set-payload>
@@ -173,6 +199,62 @@ payload map ((payload01 , indexOfPayload01) -> {
 flatten payload]]></dw:set-payload>
         </dw:transform-message>
     </flow>
+    <flow name="transactionsFlow">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/transactions" allowedMethods="GET" doc:name="GET /transactions"/>
+        <dw:transform-message doc:name="Transform Message" metadata:id="88fb1ffa-a274-43c5-9089-f9a585187a36">
+            <dw:input-payload mimeType="application/java"/>
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/xml
+%namespace ns0 http://training.mulesoft.com/
+---
+ns0#GetTransactionsforFlights: {(payload map {
+	flightID: 
+		upper $.airlineName ++ 
+		upper $.flightCode ++
+		$.departureDate 
+			as :date {format: "yyyy/MM/dd"} 
+			as :string {format: "yyyy-MM-dd"}
+})}]]></dw:set-payload>
+        </dw:transform-message>
+        <ws:consumer config-ref="Transactions_Web_Service_Consumer" operation="${webservice.operation}" doc:name="GetTransactionsForFlights"/>
+        <dw:transform-message doc:name="Transform Message">
+            <dw:input-payload doc:sample="sample_data\GetTransactionsforFlightsResponse_3.xml"/>
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+%namespace ns0 http://training.mulesoft.com/
+---
+payload.ns0#GetTransactionsforFlightsResponse.*transaction.customerRef]]></dw:set-payload>
+            <dw:set-variable variableName="transactionsPayload"><![CDATA[%dw 1.0
+%output application/java
+%namespace ns0 http://training.mulesoft.com/
+---
+payload.ns0#GetTransactionsforFlightsResponse.*transaction]]></dw:set-variable>
+
+        </dw:transform-message>
+    </flow>
+    <flow name="accountsFlow">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/accounts" allowedMethods="GET" doc:name="GET /accounts"/>
+
+        <http:request config-ref="Accounts_HTTP_Request_Configuration" path="/accountList" method="POST" doc:name="POST /accountList">
+            <http:request-builder>
+                <http:header headerName="Requester-ID" value="#[message.inboundProperties.'Requester-ID']"/>
+
+            </http:request-builder>
+        </http:request>
+        <dw:transform-message doc:name="Transform Message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/java
+---
+payload]]></dw:set-payload>
+            <dw:set-variable variableName="accountsPayload"><![CDATA[%dw 1.0
+%output application/java
+---
+read(payload,"application/json")]]></dw:set-variable>
+
+        </dw:transform-message>
+
+    </flow>
+
     <flow name="postFlightFlow">
         <dw:transform-message doc:name="Transform Message">
             <dw:input-payload doc:sample="flight-example.json"/>

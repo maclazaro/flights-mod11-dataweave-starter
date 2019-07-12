@@ -11,10 +11,12 @@ http://www.mulesoft.org/schema/mule/ws http://www.mulesoft.org/schema/mule/ws/cu
     <context:property-placeholder location="flights-${env}.properties"/>
     <http:listener-config name="HTTP_Listener_Configuration" host="0.0.0.0" port="${http.port}" doc:name="HTTP Listener Configuration"/>
     <http:request-config name="United_HTTP_Request_Configuration" host="${united.host}" port="80" doc:name="HTTP Request Configuration"/>
-    <http:request-config name="American_HTTP_Request_Configuration" host="training-american-ws.cloudhub.io" port="80" basePath="/api/" doc:name="HTTP Request Configuration">
+    <http:request-config name="American_HTTP_Request_Configuration" host="training-american-ws.cloudhub.io" port="80" basePath="/api" doc:name="HTTP Request Configuration">
         <http:raml-api-configuration location="https://anypoint.mulesoft.com/exchange/api/v1/organizations/68ef9520-24e9-4cf2-b2f5-620025690913/assets/68ef9520-24e9-4cf2-b2f5-620025690913/training-american-flights-api/1.0.0/api/root"/>
     </http:request-config>
     <ws:consumer-config name="Delta_Web_Service_Consumer" wsdlLocation="http://mu.mulesoft-training.com/essentials/delta?wsdl" service="TicketServiceService" port="TicketServicePort" serviceAddress="http://training-u.cloudhub.io/essentials/delta" doc:name="Web Service Consumer"/>
+    <ws:consumer-config name="Transactions_Web_Service_Consumer" wsdlLocation="${webservice.wsdl}" service="${webservice.service}" port="${webservice.port}" serviceAddress="${webservice.address}" doc:name="Web Service Consumer"/>
+    <http:request-config name="Accounts_HTTP_Request_Configuration" host="${accounts.host}" port="${accounts.port}" basePath="${accounts.basePath}" doc:name="HTTP Request Configuration"/>
     <configuration defaultExceptionStrategy-ref="Choice_Exception_Strategy" doc:name="Configuration">
         <expression-language>
         	<global-functions>
